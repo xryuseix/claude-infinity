@@ -29,5 +29,5 @@ test:
 clean:
 	rm -f $(BINARY_NAME)
 
-install: build
-	cp $(BINARY_NAME) /usr/local/bin/
+install:
+	$(GO) install $(GOFLAGS) -ldflags "$(LDFLAGS)" .

@@ -29,13 +29,13 @@ make
 
 `make` を実行すると、フォーマット → lint → ビルドの順に実行され、`claude2` バイナリが生成されます。
 
-### PATH を通す
+### インストール
 
 ```bash
-sudo make install
+go install ./...
 ```
 
-`/usr/local/bin/` に `claude2` バイナリがコピーされます。
+`$GOBIN`（通常 `~/go/bin/`）に `claude2` バイナリがインストールされます。
 
 ### Makefile ターゲット
 
@@ -47,7 +47,7 @@ sudo make install
 | `make lint` | `go vet` + `golangci-lint`（インストール済みの場合）を実行 |
 | `make vet` | `go vet` を実行 |
 | `make clean` | ビルド生成物を削除 |
-| `make install` | ビルドして `/usr/local/bin/` にコピー |
+| `make install` | `go install` で `$GOBIN` にインストール |
 
 ## 使い方
 
