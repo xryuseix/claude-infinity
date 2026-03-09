@@ -1,5 +1,7 @@
 package main
 
+//go:generate go run go.uber.org/mock/mockgen -source=main.go -destination=mock_test.go -package=main
+
 import (
 	"context"
 	"flag"
@@ -18,6 +20,30 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 )
+
+// runner は Claude CLI の実行を抽象化する
+type runner interface {
+	RunClaude(args []string) (runResult, error)
+}
+
+// waiter は指定時刻までの待機を抽象化する
+type waiter interface {
+	WaitUntil(ctx context.Context, target time.Time) bool
+}
+
+// ptyRunner は runner の実装で、PTY 経由で claude を実行する
+type ptyRunner struct{}
+
+func (p *ptyRunner) RunClaude(args []string) (runResult, error) {
+	return runClaude(args)
+}
+
+// realWaiter は waiter の実装で、実際に時刻まで待機する
+type realWaiter struct{}
+
+func (rw *realWaiter) WaitUntil(ctx context.Context, target time.Time) bool {
+	return waitUntil(ctx, target)
+}
 
 // savedTerm はシグナルハンドラからターミナル状態を復元するためのグローバル変数
 var (
@@ -105,10 +131,10 @@ func isRateLimited(data []byte) bool {
 	return false
 }
 
-// parseResetTime は出力からリセット時刻を抽出し、time.Time に変換する
+// parseResetTimeAt は出力からリセット時刻を抽出し、now を基準に time.Time に変換する
 // 例: "Your limit will reset at 7pm (Asia/Tokyo)" → 当日 19:00 JST
-// リセット時刻が現在より過去の場合は翌日として扱う
-func parseResetTime(data []byte) (time.Time, bool) {
+// リセット時刻が now より過去の場合は翌日として扱う
+func parseResetTimeAt(data []byte, now time.Time) (time.Time, bool) {
 	matches := resetTimePattern.FindSubmatch(data)
 	if matches == nil {
 		return time.Time{}, false
@@ -140,15 +166,20 @@ func parseResetTime(data []byte) (time.Time, bool) {
 		h = 0
 	}
 
-	now := time.Now().In(loc)
-	target := time.Date(now.Year(), now.Month(), now.Day(), h, m, 0, 0, loc)
+	nowInLoc := now.In(loc)
+	target := time.Date(nowInLoc.Year(), nowInLoc.Month(), nowInLoc.Day(), h, m, 0, 0, loc)
 
 	// リセット時刻が過去なら翌日
-	if target.Before(now) {
+	if target.Before(nowInLoc) {
 		target = target.Add(24 * time.Hour)
 	}
 
 	return target, true
+}
+
+// parseResetTime は parseResetTimeAt のラッパーで、現在時刻を基準にする
+func parseResetTime(data []byte) (time.Time, bool) {
+	return parseResetTimeAt(data, time.Now())
 }
 
 type runResult struct {
@@ -260,6 +291,55 @@ func waitUntil(ctx context.Context, target time.Time) bool {
 	}
 }
 
+// runLoop はリトライループを実行し、終了コードを返す
+func runLoop(ctx context.Context, r runner, w waiter, args []string, maxRetries int, fallbackWait time.Duration) int {
+	fmt.Fprintf(os.Stderr, "[claude2] Claude Code を起動します...\n")
+
+	isResume := false
+	for i := 0; i < maxRetries; i++ {
+		var claudeArgs []string
+		if isResume {
+			claudeArgs = []string{"--resume"}
+			fmt.Fprintf(os.Stderr, "[claude2] セッションを再開します (リトライ %d/%d)\n", i+1, maxRetries)
+		} else {
+			claudeArgs = args
+		}
+
+		result, err := r.RunClaude(claudeArgs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "\n[claude2] エラー: %v\n", err)
+			return 1
+		}
+
+		if !result.rateLimited {
+			return result.exitCode
+		}
+
+		// リセット時刻のパースを試みる
+		var resumeAt time.Time
+		if resetTime, ok := parseResetTime(result.outputData); ok {
+			// リセット時刻 + 1分のバッファ
+			resumeAt = resetTime.Add(1 * time.Minute)
+			fmt.Fprintf(os.Stderr, "\n[claude2] Usage Limit を検出しました。%s に再開します...\n",
+				resetTime.Format("15:04 (MST)"))
+		} else {
+			// リセット時刻が取得できなかった場合はフォールバック
+			resumeAt = time.Now().Add(fallbackWait)
+			waitMin := int(fallbackWait.Minutes())
+			fmt.Fprintf(os.Stderr, "\n[claude2] Usage Limit を検出しました。%d 分後に再開します（リセット時刻を取得できませんでした）...\n", waitMin)
+		}
+
+		if !w.WaitUntil(ctx, resumeAt) {
+			return 130
+		}
+
+		isResume = true
+	}
+
+	fmt.Fprintf(os.Stderr, "[claude2] 最大リトライ回数(%d)に達しました。\n", maxRetries)
+	return 1
+}
+
 func main() {
 	waitMin := flag.Int("wait", 5, "リセット時刻を取得できなかった場合のフォールバック待機時間（分）")
 	maxRetries := flag.Int("max-retries", 50, "最大リトライ回数")
@@ -296,48 +376,8 @@ func main() {
 		os.Exit(130)
 	}()
 
-	fmt.Fprintf(os.Stderr, "[claude2] Claude Code を起動します...\n")
-
-	isResume := false
-	for i := 0; i < *maxRetries; i++ {
-		var claudeArgs []string
-		if isResume {
-			claudeArgs = []string{"--resume"}
-			fmt.Fprintf(os.Stderr, "[claude2] セッションを再開します (リトライ %d/%d)\n", i+1, *maxRetries)
-		} else {
-			claudeArgs = args
-		}
-
-		result, err := runClaude(claudeArgs)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "\n[claude2] エラー: %v\n", err)
-			os.Exit(1)
-		}
-
-		if !result.rateLimited {
-			os.Exit(result.exitCode)
-		}
-
-		// リセット時刻のパースを試みる
-		var resumeAt time.Time
-		if resetTime, ok := parseResetTime(result.outputData); ok {
-			// リセット時刻 + 1分のバッファ
-			resumeAt = resetTime.Add(1 * time.Minute)
-			fmt.Fprintf(os.Stderr, "\n[claude2] Usage Limit を検出しました。%s に再開します...\n",
-				resetTime.Format("15:04 (MST)"))
-		} else {
-			// リセット時刻が取得できなかった場合はフォールバック
-			resumeAt = time.Now().Add(waitDuration)
-			fmt.Fprintf(os.Stderr, "\n[claude2] Usage Limit を検出しました。%d 分後に再開します（リセット時刻を取得できませんでした）...\n", *waitMin)
-		}
-
-		if !waitUntil(ctx, resumeAt) {
-			os.Exit(130)
-		}
-
-		isResume = true
-	}
-
-	fmt.Fprintf(os.Stderr, "[claude2] 最大リトライ回数(%d)に達しました。\n", *maxRetries)
-	os.Exit(1)
+	r := &ptyRunner{}
+	w := &realWaiter{}
+	exitCode := runLoop(ctx, r, w, args, *maxRetries, waitDuration)
+	os.Exit(exitCode)
 }

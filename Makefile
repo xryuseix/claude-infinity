@@ -3,9 +3,9 @@ GO := go
 GOFLAGS :=
 LDFLAGS :=
 
-.PHONY: all build lint fmt vet clean install
+.PHONY: all build lint fmt vet clean install test
 
-all: fmt lint build
+all: fmt lint build test
 
 build:
 	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY_NAME) .
@@ -22,6 +22,9 @@ vet:
 
 fmt:
 	gofmt -w .
+
+test:
+	$(GO) test -v ./...
 
 clean:
 	rm -f $(BINARY_NAME)
