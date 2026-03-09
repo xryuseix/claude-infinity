@@ -29,10 +29,34 @@ make
 
 `make` を実行すると、フォーマット → lint → ビルドの順に実行され、`claude2` バイナリが生成されます。
 
-PATH の通った場所にインストールする場合:
+### PATH を通す
+
+いずれかの方法で `claude2` コマンドをどこからでも実行できるようにします。
+
+**方法 1: `make install`（`/usr/local/bin/` にコピー）**
 
 ```bash
-make install
+sudo make install
+```
+
+**方法 2: シンボリックリンクを作成**
+
+```bash
+sudo ln -s "$(pwd)/claude2" /usr/local/bin/claude2
+```
+
+**方法 3: ビルドディレクトリを PATH に追加**
+
+シェルの設定ファイル（`~/.zshrc` または `~/.bashrc`）に以下を追加:
+
+```bash
+export PATH="$HOME/develop/claude-infinity:$PATH"
+```
+
+追加後、設定を反映:
+
+```bash
+source ~/.zshrc  # または source ~/.bashrc
 ```
 
 ### Makefile ターゲット
