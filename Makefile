@@ -1,4 +1,4 @@
-BINARY_NAME := claude2
+BINARY_NAME := claude-infinity
 GO := go
 GOFLAGS :=
 LDFLAGS :=

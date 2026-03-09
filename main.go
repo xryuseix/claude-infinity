@@ -283,9 +283,9 @@ func waitUntil(ctx context.Context, target time.Time) bool {
 			m := int(rem.Minutes()) % 60
 			s := int(rem.Seconds()) % 60
 			if h > 0 {
-				fmt.Fprintf(os.Stderr, "\r\033[K[claude2] 再開まで %d時間%02d分%02d秒 ...", h, m, s)
+				fmt.Fprintf(os.Stderr, "\r\033[K[claude-infinity] 再開まで %d時間%02d分%02d秒 ...", h, m, s)
 			} else {
-				fmt.Fprintf(os.Stderr, "\r\033[K[claude2] 再開まで %02d:%02d ...", m, s)
+				fmt.Fprintf(os.Stderr, "\r\033[K[claude-infinity] 再開まで %02d:%02d ...", m, s)
 			}
 		}
 	}
@@ -293,21 +293,21 @@ func waitUntil(ctx context.Context, target time.Time) bool {
 
 // runLoop はリトライループを実行し、終了コードを返す
 func runLoop(ctx context.Context, r runner, w waiter, args []string, maxRetries int, fallbackWait time.Duration) int {
-	fmt.Fprintf(os.Stderr, "[claude2] Claude Code を起動します...\n")
+	fmt.Fprintf(os.Stderr, "[claude-infinity] Claude Code を起動します...\n")
 
 	isResume := false
 	for i := 0; i < maxRetries; i++ {
 		var claudeArgs []string
 		if isResume {
 			claudeArgs = []string{"--resume"}
-			fmt.Fprintf(os.Stderr, "[claude2] セッションを再開します (リトライ %d/%d)\n", i+1, maxRetries)
+			fmt.Fprintf(os.Stderr, "[claude-infinity] セッションを再開します (リトライ %d/%d)\n", i+1, maxRetries)
 		} else {
 			claudeArgs = args
 		}
 
 		result, err := r.RunClaude(claudeArgs)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "\n[claude2] エラー: %v\n", err)
+			fmt.Fprintf(os.Stderr, "\n[claude-infinity] エラー: %v\n", err)
 			return 1
 		}
 
@@ -320,13 +320,13 @@ func runLoop(ctx context.Context, r runner, w waiter, args []string, maxRetries 
 		if resetTime, ok := parseResetTime(result.outputData); ok {
 			// リセット時刻 + 1分のバッファ
 			resumeAt = resetTime.Add(1 * time.Minute)
-			fmt.Fprintf(os.Stderr, "\n[claude2] Usage Limit を検出しました。%s に再開します...\n",
+			fmt.Fprintf(os.Stderr, "\n[claude-infinity] Usage Limit を検出しました。%s に再開します...\n",
 				resetTime.Format("15:04 (MST)"))
 		} else {
 			// リセット時刻が取得できなかった場合はフォールバック
 			resumeAt = time.Now().Add(fallbackWait)
 			waitMin := int(fallbackWait.Minutes())
-			fmt.Fprintf(os.Stderr, "\n[claude2] Usage Limit を検出しました。%d 分後に再開します（リセット時刻を取得できませんでした）...\n", waitMin)
+			fmt.Fprintf(os.Stderr, "\n[claude-infinity] Usage Limit を検出しました。%d 分後に再開します（リセット時刻を取得できませんでした）...\n", waitMin)
 		}
 
 		if !w.WaitUntil(ctx, resumeAt) {
@@ -336,7 +336,7 @@ func runLoop(ctx context.Context, r runner, w waiter, args []string, maxRetries 
 		isResume = true
 	}
 
-	fmt.Fprintf(os.Stderr, "[claude2] 最大リトライ回数(%d)に達しました。\n", maxRetries)
+	fmt.Fprintf(os.Stderr, "[claude-infinity] 最大リトライ回数(%d)に達しました。\n", maxRetries)
 	return 1
 }
 
@@ -344,16 +344,16 @@ func main() {
 	waitMin := flag.Int("wait", 5, "リセット時刻を取得できなかった場合のフォールバック待機時間（分）")
 	maxRetries := flag.Int("max-retries", 50, "最大リトライ回数")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "claude2: Usage Limit 時に自動で待機・再開する Claude Code ラッパー\n\n")
+		fmt.Fprintf(os.Stderr, "claude-infinity: Usage Limit 時に自動で待機・再開する Claude Code ラッパー\n\n")
 		fmt.Fprintf(os.Stderr, "リセット時刻が出力に含まれている場合、その時刻に合わせて自動再開します。\n")
 		fmt.Fprintf(os.Stderr, "取得できない場合は --wait で指定した時間後に再開します。\n\n")
 		fmt.Fprintf(os.Stderr, "使い方:\n")
-		fmt.Fprintf(os.Stderr, "  claude2 [オプション] [-- claude の引数...]\n\n")
+		fmt.Fprintf(os.Stderr, "  claude-infinity [オプション] [-- claude の引数...]\n\n")
 		fmt.Fprintf(os.Stderr, "例:\n")
-		fmt.Fprintf(os.Stderr, "  claude2                        # 通常の対話モード\n")
-		fmt.Fprintf(os.Stderr, "  claude2 -- -p \"Hello\"           # プロンプトを指定\n")
-		fmt.Fprintf(os.Stderr, "  claude2 --wait 10               # フォールバック待機を10分に\n")
-		fmt.Fprintf(os.Stderr, "  claude2 --max-retries 100       # 最大100回リトライ\n\n")
+		fmt.Fprintf(os.Stderr, "  claude-infinity                        # 通常の対話モード\n")
+		fmt.Fprintf(os.Stderr, "  claude-infinity -- -p \"Hello\"           # プロンプトを指定\n")
+		fmt.Fprintf(os.Stderr, "  claude-infinity --wait 10               # フォールバック待機を10分に\n")
+		fmt.Fprintf(os.Stderr, "  claude-infinity --max-retries 100       # 最大100回リトライ\n\n")
 		fmt.Fprintf(os.Stderr, "オプション:\n")
 		flag.PrintDefaults()
 	}
@@ -372,7 +372,7 @@ func main() {
 		<-sig
 		restoreTerm()
 		cancel()
-		fmt.Fprintf(os.Stderr, "\n[claude2] 中断しました。\n")
+		fmt.Fprintf(os.Stderr, "\n[claude-infinity] 中断しました。\n")
 		os.Exit(130)
 	}()
 

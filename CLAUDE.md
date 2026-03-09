@@ -28,17 +28,17 @@ make build      # ビルドのみ
 make fmt        # gofmt
 make lint       # go vet + golangci-lint
 make clean      # 生成物削除
-make install    # /usr/local/bin/ にインストール
-./claude2                  # 対話モード
-./claude2 --wait 10        # 待機時間を10分に
-./claude2 -- -p "..."      # claude に引数を渡す
+make install    # go install で $GOBIN にインストール
+./claude-infinity                  # 対話モード
+./claude-infinity --wait 10        # 待機時間を10分に
+./claude-infinity -- -p "..."      # claude に引数を渡す
 ```
 
 ## コーディング規約
 
 - コメントは日本語で記述する
 - エラーメッセージ・ユーザー向け出力は日本語
-- ステータス出力は stderr に出力 (`[claude2]` プレフィックス付き)
+- ステータス出力は stderr に出力 (`[claude-infinity]` プレフィックス付き)
 - claude の出力は stdout にそのまま透過する
 - ターミナル状態は必ず復元する (defer + シグナルハンドラ)
 
