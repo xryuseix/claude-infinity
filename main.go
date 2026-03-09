@@ -1,0 +1,343 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"os/signal"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/creack/pty"
+	"golang.org/x/term"
+)
+
+// savedTerm はシグナルハンドラからターミナル状態を復元するためのグローバル変数
+var (
+	savedTermState *term.State
+	savedTermFd    int
+	termMu         sync.Mutex
+)
+
+func restoreTerm() {
+	termMu.Lock()
+	defer termMu.Unlock()
+	if savedTermState != nil {
+		_ = term.Restore(savedTermFd, savedTermState)
+		savedTermState = nil
+	}
+}
+
+// ringBuffer は固定サイズの循環バッファ。出力の末尾 N バイトを保持する。
+type ringBuffer struct {
+	mu   sync.Mutex
+	data []byte
+	pos  int
+	full bool
+}
+
+func newRingBuffer(size int) *ringBuffer {
+	return &ringBuffer{data: make([]byte, size)}
+}
+
+func (r *ringBuffer) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, b := range p {
+		r.data[r.pos] = b
+		r.pos = (r.pos + 1) % len(r.data)
+		if r.pos == 0 {
+			r.full = true
+		}
+	}
+	return len(p), nil
+}
+
+func (r *ringBuffer) Bytes() []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.full {
+		out := make([]byte, r.pos)
+		copy(out, r.data[:r.pos])
+		return out
+	}
+	size := len(r.data)
+	out := make([]byte, size)
+	n := copy(out, r.data[r.pos:])
+	copy(out[n:], r.data[:r.pos])
+	return out
+}
+
+// Usage Limit / Rate Limit を示す出力パターン
+var limitPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)usage[\s_-]*limit`),
+	regexp.MustCompile(`(?i)rate[\s_-]*limit`),
+	regexp.MustCompile(`(?i)too\s+many\s+requests`),
+	regexp.MustCompile(`(?i)quota[\s_-]*exceeded`),
+	regexp.MustCompile(`(?i)you.ve\s+(hit|reached)`),
+	regexp.MustCompile(`(?i)limit\s+reached`),
+	regexp.MustCompile(`(?i)try\s+again\s+(later|in)`),
+	regexp.MustCompile(`(?i)throttl`),
+	regexp.MustCompile(`(?i)resource[\s_-]*exhausted`),
+}
+
+// resetTimePattern は "Your limit will reset at 7pm (Asia/Tokyo)" 形式からリセット時刻を抽出する
+var resetTimePattern = regexp.MustCompile(
+	`(?i)limit\s+will\s+reset\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s*\(([^)]+)\)`,
+)
+
+// timePartPattern は "7pm", "7:30pm", "12:00am" のような時刻文字列をパースする
+var timePartPattern = regexp.MustCompile(`(?i)(\d{1,2})(?::(\d{2}))?\s*(am|pm)`)
+
+func isRateLimited(data []byte) bool {
+	for _, p := range limitPatterns {
+		if p.Match(data) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseResetTime は出力からリセット時刻を抽出し、time.Time に変換する
+// 例: "Your limit will reset at 7pm (Asia/Tokyo)" → 当日 19:00 JST
+// リセット時刻が現在より過去の場合は翌日として扱う
+func parseResetTime(data []byte) (time.Time, bool) {
+	matches := resetTimePattern.FindSubmatch(data)
+	if matches == nil {
+		return time.Time{}, false
+	}
+
+	timeStr := string(matches[1])
+	tzStr := strings.TrimSpace(string(matches[2]))
+
+	loc, err := time.LoadLocation(tzStr)
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	tMatches := timePartPattern.FindStringSubmatch(timeStr)
+	if tMatches == nil {
+		return time.Time{}, false
+	}
+
+	h, _ := strconv.Atoi(tMatches[1])
+	m := 0
+	if tMatches[2] != "" {
+		m, _ = strconv.Atoi(tMatches[2])
+	}
+	ampm := strings.ToLower(tMatches[3])
+
+	if ampm == "pm" && h != 12 {
+		h += 12
+	} else if ampm == "am" && h == 12 {
+		h = 0
+	}
+
+	now := time.Now().In(loc)
+	target := time.Date(now.Year(), now.Month(), now.Day(), h, m, 0, 0, loc)
+
+	// リセット時刻が過去なら翌日
+	if target.Before(now) {
+		target = target.Add(24 * time.Hour)
+	}
+
+	return target, true
+}
+
+type runResult struct {
+	rateLimited bool
+	exitCode    int
+	outputData  []byte // リセット時刻パース用の出力データ
+}
+
+// runClaude は claude CLI を PTY 経由で起動し、出力を監視する
+func runClaude(args []string) (runResult, error) {
+	cmd := exec.Command("claude", args...)
+
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		return runResult{}, fmt.Errorf("claude の起動に失敗: %w", err)
+	}
+	defer func() { _ = ptmx.Close() }()
+
+	// ウィンドウサイズ変更の転送
+	winch := make(chan os.Signal, 1)
+	signal.Notify(winch, syscall.SIGWINCH)
+	defer signal.Stop(winch)
+	go func() {
+		for range winch {
+			_ = pty.InheritSize(os.Stdin, ptmx)
+		}
+	}()
+	_ = pty.InheritSize(os.Stdin, ptmx)
+
+	// ターミナルを raw モードに設定
+	fd := int(os.Stdin.Fd())
+	if term.IsTerminal(fd) {
+		old, err := term.MakeRaw(fd)
+		if err == nil {
+			termMu.Lock()
+			savedTermState = old
+			savedTermFd = fd
+			termMu.Unlock()
+			defer func() {
+				_ = term.Restore(fd, old)
+				termMu.Lock()
+				savedTermState = nil
+				termMu.Unlock()
+			}()
+		}
+	}
+
+	// 出力を監視するための ringBuffer（末尾 16KB を保持）
+	ring := newRingBuffer(16384)
+	mw := io.MultiWriter(os.Stdout, ring)
+
+	// stdin → PTY
+	go func() {
+		_, _ = io.Copy(ptmx, os.Stdin)
+	}()
+
+	// PTY → stdout + ringBuffer
+	copyDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(mw, ptmx)
+		close(copyDone)
+	}()
+
+	waitErr := cmd.Wait()
+
+	// 残りの出力がフラッシュされるのを待つ
+	select {
+	case <-copyDone:
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	result := runResult{exitCode: 0}
+	if waitErr != nil {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			result.exitCode = exitErr.ExitCode()
+		}
+	}
+
+	ringData := ring.Bytes()
+	result.rateLimited = isRateLimited(ringData)
+	result.outputData = ringData
+	return result, nil
+}
+
+// waitUntil は指定時刻までカウントダウンを表示しながら待機する
+func waitUntil(ctx context.Context, target time.Time) bool {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case now := <-ticker.C:
+			rem := target.Sub(now)
+			if rem <= 0 {
+				fmt.Fprintf(os.Stderr, "\r\033[K")
+				return true
+			}
+			h := int(rem.Hours())
+			m := int(rem.Minutes()) % 60
+			s := int(rem.Seconds()) % 60
+			if h > 0 {
+				fmt.Fprintf(os.Stderr, "\r\033[K[claude2] 再開まで %d時間%02d分%02d秒 ...", h, m, s)
+			} else {
+				fmt.Fprintf(os.Stderr, "\r\033[K[claude2] 再開まで %02d:%02d ...", m, s)
+			}
+		}
+	}
+}
+
+func main() {
+	waitMin := flag.Int("wait", 5, "リセット時刻を取得できなかった場合のフォールバック待機時間（分）")
+	maxRetries := flag.Int("max-retries", 50, "最大リトライ回数")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "claude2: Usage Limit 時に自動で待機・再開する Claude Code ラッパー\n\n")
+		fmt.Fprintf(os.Stderr, "リセット時刻が出力に含まれている場合、その時刻に合わせて自動再開します。\n")
+		fmt.Fprintf(os.Stderr, "取得できない場合は --wait で指定した時間後に再開します。\n\n")
+		fmt.Fprintf(os.Stderr, "使い方:\n")
+		fmt.Fprintf(os.Stderr, "  claude2 [オプション] [-- claude の引数...]\n\n")
+		fmt.Fprintf(os.Stderr, "例:\n")
+		fmt.Fprintf(os.Stderr, "  claude2                        # 通常の対話モード\n")
+		fmt.Fprintf(os.Stderr, "  claude2 -- -p \"Hello\"           # プロンプトを指定\n")
+		fmt.Fprintf(os.Stderr, "  claude2 --wait 10               # フォールバック待機を10分に\n")
+		fmt.Fprintf(os.Stderr, "  claude2 --max-retries 100       # 最大100回リトライ\n\n")
+		fmt.Fprintf(os.Stderr, "オプション:\n")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	args := flag.Args()
+	waitDuration := time.Duration(*waitMin) * time.Minute
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// シグナルハンドラ（待機中の Ctrl+C で終了）
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sig
+		restoreTerm()
+		cancel()
+		fmt.Fprintf(os.Stderr, "\n[claude2] 中断しました。\n")
+		os.Exit(130)
+	}()
+
+	fmt.Fprintf(os.Stderr, "[claude2] Claude Code を起動します...\n")
+
+	isResume := false
+	for i := 0; i < *maxRetries; i++ {
+		var claudeArgs []string
+		if isResume {
+			claudeArgs = []string{"--resume"}
+			fmt.Fprintf(os.Stderr, "[claude2] セッションを再開します (リトライ %d/%d)\n", i+1, *maxRetries)
+		} else {
+			claudeArgs = args
+		}
+
+		result, err := runClaude(claudeArgs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "\n[claude2] エラー: %v\n", err)
+			os.Exit(1)
+		}
+
+		if !result.rateLimited {
+			os.Exit(result.exitCode)
+		}
+
+		// リセット時刻のパースを試みる
+		var resumeAt time.Time
+		if resetTime, ok := parseResetTime(result.outputData); ok {
+			// リセット時刻 + 1分のバッファ
+			resumeAt = resetTime.Add(1 * time.Minute)
+			fmt.Fprintf(os.Stderr, "\n[claude2] Usage Limit を検出しました。%s に再開します...\n",
+				resetTime.Format("15:04 (MST)"))
+		} else {
+			// リセット時刻が取得できなかった場合はフォールバック
+			resumeAt = time.Now().Add(waitDuration)
+			fmt.Fprintf(os.Stderr, "\n[claude2] Usage Limit を検出しました。%d 分後に再開します（リセット時刻を取得できませんでした）...\n", *waitMin)
+		}
+
+		if !waitUntil(ctx, resumeAt) {
+			os.Exit(130)
+		}
+
+		isResume = true
+	}
+
+	fmt.Fprintf(os.Stderr, "[claude2] 最大リトライ回数(%d)に達しました。\n", *maxRetries)
+	os.Exit(1)
+}
