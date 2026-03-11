@@ -196,7 +196,7 @@ func runClaude(args []string) (runResult, error) {
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
-		return runResult{}, fmt.Errorf("claude の起動に失敗: %w", err)
+		return runResult{}, fmt.Errorf("failed to start claude: %w", err)
 	}
 	defer func() { _ = ptmx.Close() }()
 
@@ -288,9 +288,9 @@ func waitUntil(ctx context.Context, target time.Time) bool {
 			m := int(rem.Minutes()) % 60
 			s := int(rem.Seconds()) % 60
 			if h > 0 {
-				fmt.Fprintf(os.Stderr, "\r\033[K[claude-infinity] 再開まで %d時間%02d分%02d秒 ...", h, m, s)
+				fmt.Fprintf(os.Stderr, "\r\033[K[claude-infinity] Resuming in %dh %02dm %02ds ...", h, m, s)
 			} else {
-				fmt.Fprintf(os.Stderr, "\r\033[K[claude-infinity] 再開まで %02d:%02d ...", m, s)
+				fmt.Fprintf(os.Stderr, "\r\033[K[claude-infinity] Resuming in %02d:%02d ...", m, s)
 			}
 		}
 	}
@@ -301,7 +301,7 @@ const sandboxSettings = `{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":t
 
 // runLoop はリトライループを実行し、終了コードを返す
 func runLoop(ctx context.Context, r runner, w waiter, args []string, maxRetries int, fallbackWait time.Duration, noSandbox bool) int {
-	fmt.Fprintf(os.Stderr, "[claude-infinity] Claude Code を起動します...\n")
+	fmt.Fprintf(os.Stderr, "[claude-infinity] Starting Claude Code...\n")
 
 	// デフォルトでサンドボックスモードを有効化する引数
 	defaultArgs := []string{}
@@ -314,14 +314,14 @@ func runLoop(ctx context.Context, r runner, w waiter, args []string, maxRetries 
 		var claudeArgs []string
 		if isResume {
 			claudeArgs = append(defaultArgs, "--resume")
-			fmt.Fprintf(os.Stderr, "[claude-infinity] セッションを再開します (リトライ %d/%d)\n", i+1, maxRetries)
+			fmt.Fprintf(os.Stderr, "[claude-infinity] Resuming session (retry %d/%d)...\n", i+1, maxRetries)
 		} else {
 			claudeArgs = append(defaultArgs, args...)
 		}
 
 		result, err := r.RunClaude(claudeArgs)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "\n[claude-infinity] エラー: %v\n", err)
+			fmt.Fprintf(os.Stderr, "\n[claude-infinity] Error: %v\n", err)
 			return 1
 		}
 
@@ -334,13 +334,13 @@ func runLoop(ctx context.Context, r runner, w waiter, args []string, maxRetries 
 		if resetTime, ok := parseResetTime(result.outputData); ok {
 			// リセット時刻 + 1分のバッファ
 			resumeAt = resetTime.Add(1 * time.Minute)
-			fmt.Fprintf(os.Stderr, "\n[claude-infinity] Usage Limit を検出しました。%s に再開します...\n",
+			fmt.Fprintf(os.Stderr, "\n[claude-infinity] Usage limit detected. Resuming at %s...\n",
 				resetTime.Format("15:04 (MST)"))
 		} else {
 			// リセット時刻が取得できなかった場合はフォールバック
 			resumeAt = time.Now().Add(fallbackWait)
 			waitMin := int(fallbackWait.Minutes())
-			fmt.Fprintf(os.Stderr, "\n[claude-infinity] Usage Limit を検出しました。%d 分後に再開します（リセット時刻を取得できませんでした）...\n", waitMin)
+			fmt.Fprintf(os.Stderr, "\n[claude-infinity] Usage limit detected. Resuming in %d min (reset time unavailable)...\n", waitMin)
 		}
 
 		if !w.WaitUntil(ctx, resumeAt) {
@@ -350,27 +350,27 @@ func runLoop(ctx context.Context, r runner, w waiter, args []string, maxRetries 
 		isResume = true
 	}
 
-	fmt.Fprintf(os.Stderr, "[claude-infinity] 最大リトライ回数(%d)に達しました。\n", maxRetries)
+	fmt.Fprintf(os.Stderr, "[claude-infinity] Max retries (%d) reached.\n", maxRetries)
 	return 1
 }
 
 func main() {
-	waitMin := flag.Int("wait", 60, "リセット時刻を取得できなかった場合のフォールバック待機時間（分）")
-	maxRetries := flag.Int("max-retries", 50, "最大リトライ回数")
-	noSandbox := flag.Bool("no-sandbox", false, "サンドボックスモードを無効化する（デフォルトは有効）")
+	waitMin := flag.Int("wait", 60, "fallback wait time in minutes when reset time is unavailable")
+	maxRetries := flag.Int("max-retries", 50, "maximum number of retries")
+	noSandbox := flag.Bool("no-sandbox", false, "disable sandbox mode (enabled by default)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "claude-infinity: Usage Limit 時に自動で待機・再開する Claude Code ラッパー\n\n")
-		fmt.Fprintf(os.Stderr, "リセット時刻が出力に含まれている場合、その時刻に合わせて自動再開します。\n")
-		fmt.Fprintf(os.Stderr, "取得できない場合は --wait で指定した時間後に再開します。\n\n")
-		fmt.Fprintf(os.Stderr, "使い方:\n")
-		fmt.Fprintf(os.Stderr, "  claude-infinity [オプション] [-- claude の引数...]\n\n")
-		fmt.Fprintf(os.Stderr, "例:\n")
-		fmt.Fprintf(os.Stderr, "  claude-infinity                        # サンドボックスモードで起動（デフォルト）\n")
-		fmt.Fprintf(os.Stderr, "  claude-infinity --no-sandbox           # サンドボックスなしで起動\n")
-		fmt.Fprintf(os.Stderr, "  claude-infinity -- -p \"Hello\"           # プロンプトを指定\n")
-		fmt.Fprintf(os.Stderr, "  claude-infinity --wait 10               # フォールバック待機を10分に\n")
-		fmt.Fprintf(os.Stderr, "  claude-infinity --max-retries 100       # 最大100回リトライ\n\n")
-		fmt.Fprintf(os.Stderr, "オプション:\n")
+		fmt.Fprintf(os.Stderr, "claude-infinity: Claude Code wrapper that auto-waits and resumes on usage limits\n\n")
+		fmt.Fprintf(os.Stderr, "When a reset time is found in the output, resumes at that time.\n")
+		fmt.Fprintf(os.Stderr, "Otherwise waits for the duration specified by --wait.\n\n")
+		fmt.Fprintf(os.Stderr, "Usage:\n")
+		fmt.Fprintf(os.Stderr, "  claude-infinity [options] [-- claude args...]\n\n")
+		fmt.Fprintf(os.Stderr, "Examples:\n")
+		fmt.Fprintf(os.Stderr, "  claude-infinity                        # start in sandbox mode (default)\n")
+		fmt.Fprintf(os.Stderr, "  claude-infinity --no-sandbox           # start without sandbox\n")
+		fmt.Fprintf(os.Stderr, "  claude-infinity -- -p \"Hello\"           # pass prompt to claude\n")
+		fmt.Fprintf(os.Stderr, "  claude-infinity --wait 10               # set fallback wait to 10 min\n")
+		fmt.Fprintf(os.Stderr, "  claude-infinity --max-retries 100       # retry up to 100 times\n\n")
+		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -388,7 +388,7 @@ func main() {
 		<-sig
 		restoreTerm()
 		cancel()
-		fmt.Fprintf(os.Stderr, "\n[claude-infinity] 中断しました。\n")
+		fmt.Fprintf(os.Stderr, "\n[claude-infinity] Interrupted.\n")
 		os.Exit(130)
 	}()
 
