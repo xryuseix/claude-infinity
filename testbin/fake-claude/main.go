@@ -34,6 +34,8 @@ func main() {
 		switch strings.TrimSpace(parts[idx]) {
 		case "rate_limit":
 			doRateLimit()
+		case "rate_limit_with_time":
+			doRateLimitWithTime()
 		default:
 			doSuccess()
 		}
@@ -76,6 +78,36 @@ func readAndIncrementCallCount() int {
 // claude-infinity の fallbackWait でリトライが制御される。
 func doRateLimit() {
 	fmt.Println("You've hit your limit")
+}
+
+// doRateLimitWithTime は実際の Claude Code に近い形式のリセット時刻付き
+// Usage Limit メッセージを出力する。
+// PTY 上の折り返しを再現するため、時刻とタイムゾーンを別行に分けて出力する。
+// 出力例:
+//
+//	You've hit your limit · resets 3am
+//	(Asia/Tokyo)
+func doRateLimitWithTime() {
+	// 現在時刻+1時間を JST でのリセット時刻として出力する
+	jst := time.FixedZone("Asia/Tokyo", 9*60*60)
+	resetAt := time.Now().In(jst).Add(time.Hour)
+	fmt.Printf("You've hit your limit · resets %s\n(%s)\n",
+		formatHour(resetAt), resetAt.Location().String())
+}
+
+// formatHour は time.Time を "3am" / "3pm" 形式の文字列に変換する。
+func formatHour(t time.Time) string {
+	h := t.Hour()
+	switch {
+	case h == 0:
+		return "12am"
+	case h < 12:
+		return fmt.Sprintf("%dam", h)
+	case h == 12:
+		return "12pm"
+	default:
+		return fmt.Sprintf("%dpm", h-12)
+	}
 }
 
 // doSuccess は正常終了を模擬する。
