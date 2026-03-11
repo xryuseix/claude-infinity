@@ -213,7 +213,7 @@ func TestRunLoop_NormalExit(t *testing.T) {
 	}, nil)
 
 	ctx := context.Background()
-	code := runLoop(ctx, mr, mw, []string{"-p", "hello"}, 5, 5*time.Minute)
+	code := runLoop(ctx, mr, mw, []string{"-p", "hello"}, 5, 5*time.Minute, true)
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0", code)
 	}
@@ -242,7 +242,7 @@ func TestRunLoop_RateLimitThenSuccess(t *testing.T) {
 	}, nil).After(first)
 
 	ctx := context.Background()
-	code := runLoop(ctx, mr, mw, []string{"-p", "hello"}, 5, 5*time.Minute)
+	code := runLoop(ctx, mr, mw, []string{"-p", "hello"}, 5, 5*time.Minute, true)
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0", code)
 	}
@@ -271,7 +271,7 @@ func TestRunLoop_WithResetTime(t *testing.T) {
 	}, nil).After(first)
 
 	ctx := context.Background()
-	code := runLoop(ctx, mr, mw, []string{}, 5, 5*time.Minute)
+	code := runLoop(ctx, mr, mw, []string{}, 5, 5*time.Minute, true)
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0", code)
 	}
@@ -303,7 +303,7 @@ func TestRunLoop_MaxRetriesExceeded(t *testing.T) {
 	mw.EXPECT().WaitUntil(gomock.Any(), gomock.Any()).Return(true).Times(3)
 
 	ctx := context.Background()
-	code := runLoop(ctx, mr, mw, []string{}, maxRetries, 5*time.Minute)
+	code := runLoop(ctx, mr, mw, []string{}, maxRetries, 5*time.Minute, true)
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
@@ -318,7 +318,7 @@ func TestRunLoop_RunError(t *testing.T) {
 	mr.EXPECT().RunClaude([]string{}).Return(runResult{}, errors.New("failed to start"))
 
 	ctx := context.Background()
-	code := runLoop(ctx, mr, mw, []string{}, 5, 5*time.Minute)
+	code := runLoop(ctx, mr, mw, []string{}, 5, 5*time.Minute, true)
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
@@ -341,7 +341,7 @@ func TestRunLoop_ContextCancelled(t *testing.T) {
 	mw.EXPECT().WaitUntil(gomock.Any(), gomock.Any()).Return(false)
 
 	ctx := context.Background()
-	code := runLoop(ctx, mr, mw, []string{}, 5, 5*time.Minute)
+	code := runLoop(ctx, mr, mw, []string{}, 5, 5*time.Minute, true)
 	if code != 130 {
 		t.Errorf("exit code = %d, want 130", code)
 	}
