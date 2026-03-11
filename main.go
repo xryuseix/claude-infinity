@@ -109,8 +109,7 @@ var limitPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)quota[\s_-]*exceeded`),
 	regexp.MustCompile(`(?i)you.ve\s+(hit|reached)`),
 	regexp.MustCompile(`(?i)limit\s+reached`),
-	regexp.MustCompile(`(?i)try\s+again\s+(later|in)`),
-	regexp.MustCompile(`(?i)throttl`),
+	regexp.MustCompile(`(?i)requests?\s+throttled`),
 	regexp.MustCompile(`(?i)resource[\s_-]*exhausted`),
 }
 
@@ -204,7 +203,10 @@ func runClaude(args []string) (runResult, error) {
 	// ウィンドウサイズ変更の転送
 	winch := make(chan os.Signal, 1)
 	signal.Notify(winch, syscall.SIGWINCH)
-	defer signal.Stop(winch)
+	defer func() {
+		signal.Stop(winch)
+		close(winch) // goroutine を終了させる
+	}()
 	go func() {
 		for range winch {
 			_ = pty.InheritSize(os.Stdin, ptmx)
@@ -353,7 +355,7 @@ func runLoop(ctx context.Context, r runner, w waiter, args []string, maxRetries 
 }
 
 func main() {
-	waitMin := flag.Int("wait", 5, "リセット時刻を取得できなかった場合のフォールバック待機時間（分）")
+	waitMin := flag.Int("wait", 60, "リセット時刻を取得できなかった場合のフォールバック待機時間（分）")
 	maxRetries := flag.Int("max-retries", 50, "最大リトライ回数")
 	noSandbox := flag.Bool("no-sandbox", false, "サンドボックスモードを無効化する（デフォルトは有効）")
 	flag.Usage = func() {

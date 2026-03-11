@@ -70,10 +70,9 @@ func TestIsRateLimited(t *testing.T) {
 		{"quota exceeded", "quota exceeded for today", true},
 		{"you've hit", "you've hit the limit", true},
 		{"you've reached", "You've reached the limit", true},
-		{"limit reached", "limit reached, try again later", true},
-		{"try again later", "please try again later", true},
-		{"try again in", "try again in 5 minutes", true},
-		{"throttled", "request throttled", true},
+		{"limit reached", "limit reached", true},
+		{"request throttled", "request throttled", true},
+		{"requests throttled", "requests throttled by server", true},
 		{"resource exhausted", "resource exhausted", true},
 		{"usage_limit underscore", "usage_limit", true},
 		{"rate-limit hyphen", "rate-limit", true},
@@ -93,6 +92,10 @@ func TestIsRateLimited_NoMatch(t *testing.T) {
 		"normal output",
 		"everything is fine",
 		"claude is running",
+		"please try again later",      // 汎用的な「後で再試行」はマッチしない
+		"try again in 5 minutes",      // 同上
+		"CPU throttling detected",     // CPU 制限はマッチしない
+		"network throttling enabled",  // ネットワーク制限はマッチしない
 		"",
 	}
 	for _, input := range inputs {
