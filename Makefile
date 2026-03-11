@@ -3,7 +3,7 @@ GO := go
 GOFLAGS :=
 LDFLAGS :=
 
-.PHONY: all build lint fmt vet clean install test
+.PHONY: all build lint fmt vet clean install test test-integration
 
 all: fmt lint build test
 
@@ -25,6 +25,9 @@ fmt:
 
 test:
 	$(GO) test -v ./...
+
+test-integration:
+	$(GO) test -tags integration -v -timeout 120s ./...
 
 clean:
 	rm -f $(BINARY_NAME)
