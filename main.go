@@ -114,9 +114,12 @@ var limitPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)resource[\s_-]*exhausted`),
 }
 
-// resetTimePattern は "Your limit will reset at 7pm (Asia/Tokyo)" 形式からリセット時刻を抽出する
+// resetTimePattern はリセット時刻を抽出する
+// 対応形式:
+//   - "Your limit will reset at 7pm (Asia/Tokyo)"
+//   - "You've hit your limit · resets 3am (Asia/Tokyo)"  ※改行をまたぐ場合も考慮
 var resetTimePattern = regexp.MustCompile(
-	`(?i)limit\s+will\s+reset\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s*\(([^)]+)\)`,
+	`(?i)(?:limit\s+will\s+reset\s+at|resets)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))[\s\S]*?\(([^)]+)\)`,
 )
 
 // timePartPattern は "7pm", "7:30pm", "12:00am" のような時刻文字列をパースする
