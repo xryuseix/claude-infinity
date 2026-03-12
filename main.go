@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -296,6 +297,40 @@ func waitUntil(ctx context.Context, target time.Time) bool {
 	}
 }
 
+// limitState は rate limit 検出時に .infinity.json に書き出すデバッグ情報
+type limitState struct {
+	DetectedAt     time.Time `json:"detected_at"`
+	ResumeAt       time.Time `json:"resume_at"`
+	ResetTimeFound bool      `json:"reset_time_found"`
+	Retry          int       `json:"retry"`
+	MaxRetries     int       `json:"max_retries"`
+	FallbackWaitMin int      `json:"fallback_wait_min"`
+	NoSandbox      bool      `json:"no_sandbox"`
+	Args           []string  `json:"args"`
+}
+
+// writeLimitState は rate limit 検出時の状態を JSON ファイルに書き出す。
+// 書き出し先は環境変数 CLAUDE_INFINITY_STATE_FILE で変更できる（デフォルト: .infinity.json）。
+// 環境変数を空文字に設定すると書き出しを無効化できる。
+func writeLimitState(state limitState) {
+	path := os.Getenv("CLAUDE_INFINITY_STATE_FILE")
+	if path == "" {
+		path = ".infinity.json"
+	}
+	if path == "-" {
+		return // 明示的に無効化
+	}
+
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[claude-infinity] Warning: failed to marshal state: %v\n", err)
+		return
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "[claude-infinity] Warning: failed to write state file %s: %v\n", path, err)
+	}
+}
+
 // sandboxSettings は sandbox モード有効時に claude に渡すデフォルト設定
 const sandboxSettings = `{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true}}`
 
@@ -330,18 +365,32 @@ func runLoop(ctx context.Context, r runner, w waiter, args []string, maxRetries 
 		}
 
 		// リセット時刻のパースを試みる
+		now := time.Now()
 		var resumeAt time.Time
+		resetTimeFound := false
 		if resetTime, ok := parseResetTime(result.outputData); ok {
 			// リセット時刻 + 1分のバッファ
 			resumeAt = resetTime.Add(1 * time.Minute)
+			resetTimeFound = true
 			fmt.Fprintf(os.Stderr, "\n[claude-infinity] Usage limit detected. Resuming at %s...\n",
 				resetTime.Format("15:04 (MST)"))
 		} else {
 			// リセット時刻が取得できなかった場合はフォールバック
-			resumeAt = time.Now().Add(fallbackWait)
+			resumeAt = now.Add(fallbackWait)
 			waitMin := int(fallbackWait.Minutes())
 			fmt.Fprintf(os.Stderr, "\n[claude-infinity] Usage limit detected. Resuming in %d min (reset time unavailable)...\n", waitMin)
 		}
+
+		writeLimitState(limitState{
+			DetectedAt:      now,
+			ResumeAt:        resumeAt,
+			ResetTimeFound:  resetTimeFound,
+			Retry:           i + 1,
+			MaxRetries:      maxRetries,
+			FallbackWaitMin: int(fallbackWait.Minutes()),
+			NoSandbox:       noSandbox,
+			Args:            args,
+		})
 
 		if !w.WaitUntil(ctx, resumeAt) {
 			return 130
