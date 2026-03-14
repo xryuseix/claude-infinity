@@ -166,12 +166,12 @@ func TestIntegration_ResetTimeDetection(t *testing.T) {
 
 	// WaitUntil の target が「時刻パースの結果」として渡されたことを検証する。
 	//
-	// fake-claude は「現在時刻+1時間の hour 部分」を出力するため、
-	// target は before から最小1分後〜最大61分後（+1分バッファ込み）になる。
-	// フォールバックが使われた場合は fallbackWait=100ms+1分≒すぐ になるため、
-	// target が 30分後より手前なら「フォールバックが使われた」と判断できる。
-	if capturedTarget.Before(before.Add(30 * time.Minute)) {
-		t.Errorf("WaitUntil target = %v, want at least 30min after %v\n"+
+	// fake-claude は「現在時刻+1時間の hour 部分」を出力し、+1分バッファが加わるため
+	// target は before から最小1分後（hour 切り捨ての最悪ケース）〜最大61分後になる。
+	// フォールバックが使われた場合は fallbackWait=100ms なので target ≈ before になる。
+	// 30秒を閾値にすることでフォールバックと時刻パースを確実に区別できる。
+	if capturedTarget.Before(before.Add(30 * time.Second)) {
+		t.Errorf("WaitUntil target = %v, want at least 30s after %v\n"+
 			"(time parsing may have failed and fallback was used)",
 			capturedTarget, before)
 	}

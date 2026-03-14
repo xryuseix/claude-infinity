@@ -191,6 +191,26 @@ type runResult struct {
 	outputData  []byte // リセット時刻パース用の出力データ
 }
 
+// rateLimitDetector は io.Writer を実装し、書き込まれたデータを dst に転送しながら
+// ring buffer の内容を監視する。rate limit パターンを検出した時点で proc に SIGTERM を
+// 一度だけ送り、Claude を自動終了させる。
+type rateLimitDetector struct {
+	dst  io.Writer
+	ring *ringBuffer
+	proc *os.Process
+	once sync.Once
+}
+
+func (d *rateLimitDetector) Write(p []byte) (int, error) {
+	n, err := d.dst.Write(p)
+	if isRateLimited(d.ring.Bytes()) {
+		d.once.Do(func() {
+			_ = d.proc.Signal(syscall.SIGTERM)
+		})
+	}
+	return n, err
+}
+
 // runClaude は claude CLI を PTY 経由で起動し、出力を監視する
 func runClaude(args []string) (runResult, error) {
 	cmd := exec.Command("claude", args...)
@@ -235,17 +255,25 @@ func runClaude(args []string) (runResult, error) {
 
 	// 出力を監視するための ringBuffer（末尾 16KB を保持）
 	ring := newRingBuffer(16384)
-	mw := io.MultiWriter(os.Stdout, ring)
+
+	// rateLimitDetector は PTY の出力を書き流しながら rate limit パターンを
+	// リアルタイムに監視し、検出したらプロセスに SIGTERM を送る。
+	// これにより、メニュー入力を待たずにClaudeを自動終了できる。
+	detector := &rateLimitDetector{
+		dst:  io.MultiWriter(os.Stdout, ring),
+		ring: ring,
+		proc: cmd.Process,
+	}
 
 	// stdin → PTY
 	go func() {
 		_, _ = io.Copy(ptmx, os.Stdin)
 	}()
 
-	// PTY → stdout + ringBuffer
+	// PTY → stdout + ringBuffer（リアルタイム rate limit 監視付き）
 	copyDone := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(mw, ptmx)
+		_, _ = io.Copy(detector, ptmx)
 		close(copyDone)
 	}()
 
