@@ -118,14 +118,14 @@ const tailCheckSize = 1024
 
 // Usage Limit / Rate Limit を示す出力パターン
 var limitPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)usage[\s_-]*limit`),
-	regexp.MustCompile(`(?i)rate[\s_-]*limit`),
-	regexp.MustCompile(`(?i)too\s+many\s+requests`),
-	regexp.MustCompile(`(?i)quota[\s_-]*exceeded`),
-	regexp.MustCompile("(?i)you['\u2018\u2019]ve\\s+(hit|reached)"),
-	regexp.MustCompile(`(?i)limit\s+reached`),
-	regexp.MustCompile(`(?i)requests?\s+throttled`),
-	regexp.MustCompile(`(?i)resource[\s_-]*exhausted`),
+	regexp.MustCompile(`(?i)\busage[\s_-]*limit\b`),
+	regexp.MustCompile(`(?i)\brate[\s_-]*limit\b`),
+	regexp.MustCompile(`(?i)\btoo\s+many\s+requests\b`),
+	regexp.MustCompile(`(?i)\bquota[\s_-]*exceeded\b`),
+	regexp.MustCompile("(?i)\\byou['\u2018\u2019]ve\\s+(hit|reached)\\b"),
+	regexp.MustCompile(`(?i)\blimit\s+reached\b`),
+	regexp.MustCompile(`(?i)\brequests?\s+throttled\b`),
+	regexp.MustCompile(`(?i)\bresource[\s_-]*exhausted\b`),
 }
 
 // resetTimePattern はリセット時刻を抽出する

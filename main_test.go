@@ -234,6 +234,57 @@ func TestIsRateLimited_NoMatch(t *testing.T) {
 	}
 }
 
+// TestIsRateLimited_CamelCase_NoMatch はキャメルケースの識別子が誤検出されないことを確認する。
+// rateLimitTier を含む Python コード表示で誤検出した問題の再発防止テスト。
+func TestIsRateLimited_CamelCase_NoMatch(t *testing.T) {
+	inputs := []string{
+		// キャメルケースの変数名・JSON キー
+		`rateLimitTier`,
+		`isRateLimited`,
+		`rateLimited`,
+		`usageLimitExceeded`,
+		`quotaExceededError`,
+		`resourceExhaustedErr`,
+		`requestThrottledCount`,
+		// 関数呼び出し
+		`getRateLimit()`,
+		`checkUsageLimit()`,
+		// JSON 出力
+		`{"rateLimitTier": "free"}`,
+		`"quotaExceededAt": "2025-01-01"`,
+		// 実際に誤検出を引き起こしたコマンド表示
+		`oauth.get("rateLimitTier","?")`,
+		`print(f'Tier: {oauth.get("rateLimitTier","?")}')`,
+		// スネークケースで別の識別子に埋め込まれたケース
+		`check_rate_limit_status`,
+		`is_usage_limit_enabled`,
+	}
+	for _, input := range inputs {
+		if isRateLimited([]byte(input)) {
+			t.Errorf("isRateLimited(%q) = true, want false (camelCase/identifier false positive)", input)
+		}
+	}
+}
+
+// TestIsRateLimited_RealMessages は Claude Code が実際に出力するメッセージで検出できることを確認する。
+func TestIsRateLimited_RealMessages(t *testing.T) {
+	inputs := []string{
+		"Claude usage limit reached. Your limit will reset at 7pm (Asia/Tokyo).",
+		"You've hit your rate limit. Please wait before trying again.",
+		"Too many requests. Please slow down.",
+		"Rate limit exceeded for this API key.",
+		"You've reached your usage limit for the day.",
+		"Your quota exceeded. Upgrade your plan for more.",
+		"Request throttled due to high traffic.",
+		"Resource exhausted: out of tokens.",
+	}
+	for _, input := range inputs {
+		if !isRateLimited([]byte(input)) {
+			t.Errorf("isRateLimited(%q) = false, want true (real message not detected)", input)
+		}
+	}
+}
+
 // ============================================================
 // parseResetTimeAt テスト
 // ============================================================
