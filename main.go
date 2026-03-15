@@ -125,6 +125,9 @@ var resetTimePattern = regexp.MustCompile(
 // timePartPattern は "7pm", "7:30pm", "12:00am" のような時刻文字列をパースする
 var timePartPattern = regexp.MustCompile(`(?i)(\d{1,2})(?::(\d{2}))?\s*(am|pm)`)
 
+// sessionIDPattern は "claude --resume <UUID>" からセッション ID を抽出する
+var sessionIDPattern = regexp.MustCompile(`claude\s+--resume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`)
+
 func isRateLimited(data []byte) bool {
 	for _, p := range limitPatterns {
 		if p.Match(data) {
@@ -189,6 +192,7 @@ type runResult struct {
 	rateLimited bool
 	exitCode    int
 	outputData  []byte // リセット時刻パース用の出力データ
+	sessionID   string // "claude --resume <UUID>" から抽出したセッション ID
 }
 
 // rateLimitDetector は io.Writer を実装し、書き込まれたデータを dst に転送しながら
@@ -295,6 +299,9 @@ func runClaude(args []string) (runResult, error) {
 	ringData := ring.Bytes()
 	result.rateLimited = isRateLimited(ringData)
 	result.outputData = ringData
+	if m := sessionIDPattern.FindSubmatch(ringData); m != nil {
+		result.sessionID = string(m[1])
+	}
 	return result, nil
 }
 
@@ -373,11 +380,17 @@ func runLoop(ctx context.Context, r runner, w waiter, args []string, maxRetries 
 	}
 
 	isResume := false
+	var resumeSessionID string
 	for i := 0; i < maxRetries; i++ {
 		var claudeArgs []string
 		if isResume {
-			claudeArgs = append(defaultArgs, "--resume")
-			fmt.Fprintf(os.Stderr, "[claude-infinity] Resuming session (retry %d/%d)...\n", i+1, maxRetries)
+			if resumeSessionID != "" {
+				claudeArgs = append(defaultArgs, "--resume", resumeSessionID)
+				fmt.Fprintf(os.Stderr, "[claude-infinity] Resuming session %s (retry %d/%d)...\n", resumeSessionID, i+1, maxRetries)
+			} else {
+				claudeArgs = append(defaultArgs, "--resume")
+				fmt.Fprintf(os.Stderr, "[claude-infinity] Resuming session (retry %d/%d)...\n", i+1, maxRetries)
+			}
 		} else {
 			claudeArgs = append(defaultArgs, args...)
 		}
@@ -390,6 +403,11 @@ func runLoop(ctx context.Context, r runner, w waiter, args []string, maxRetries 
 
 		if !result.rateLimited {
 			return result.exitCode
+		}
+
+		// セッション ID を保存（次のリトライで使用）
+		if result.sessionID != "" {
+			resumeSessionID = result.sessionID
 		}
 
 		// リセット時刻のパースを試みる
