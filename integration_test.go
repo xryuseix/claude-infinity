@@ -126,6 +126,27 @@ func TestIntegration_ResumeArgs(t *testing.T) {
 	}
 }
 
+// TestIntegration_SessionIDResume は rate limit 後に fake-claude が出力した
+// セッション ID を使って --resume <UUID> で再開することを確認する。
+// fake-claude は rate_limit 時に "claude --resume <UUID>" を出力し、
+// runLoop がその UUID を抽出して次の呼び出しに使うことを検証する。
+func TestIntegration_SessionIDResume(t *testing.T) {
+	setupCallCount(t)
+	// 1回目: rate_limit（セッション ID 出力あり）、2回目: success
+	t.Setenv("FAKE_CLAUDE_SEQUENCE", "rate_limit,success")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	code := runLoop(ctx, &ptyRunner{}, &realWaiter{}, []string{"-p", "hello"}, 3, 100*time.Millisecond, true)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	// 注意: この統合テストはセッション ID による再開が正常に動作することを確認する。
+	// fake-claude は --resume <UUID> を受け取っても正常に動作するため、
+	// 引数の詳細検証はユニットテスト側で行う。
+}
+
 // TestIntegration_ResetTimeDetection は fake-claude が "resets Xam (Asia/Tokyo)" 形式の
 // メッセージを出力したとき、claude-infinity がリセット時刻を正しく解析して
 // WaitUntil に渡すことを確認する。

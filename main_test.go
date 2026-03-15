@@ -327,6 +327,134 @@ func TestRunLoop_RunError(t *testing.T) {
 	}
 }
 
+// TestRunLoop_RateLimitWithSessionID は rate limit 時にセッション ID が含まれている場合に
+// 次の再開で --resume <UUID> が使われることを確認する。
+func TestRunLoop_RateLimitWithSessionID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	mr := NewMockrunner(ctrl)
+	mw := NewMockwaiter(ctrl)
+
+	sessionID := "4fd16842-bfcb-41b1-bc20-6509b3eb0bdb"
+
+	// 1回目: rate limited + セッション ID あり
+	first := mr.EXPECT().RunClaude([]string{"-p", "hello"}).Return(runResult{
+		rateLimited: true,
+		exitCode:    0,
+		outputData:  []byte("usage limit hit\nclaude --resume " + sessionID),
+		sessionID:   sessionID,
+	}, nil)
+
+	// WaitUntil が呼ばれる
+	mw.EXPECT().WaitUntil(gomock.Any(), gomock.Any()).Return(true)
+
+	// 2回目: --resume <UUID> で再開、成功
+	mr.EXPECT().RunClaude([]string{"--resume", sessionID}).Return(runResult{
+		rateLimited: false,
+		exitCode:    0,
+	}, nil).After(first)
+
+	ctx := context.Background()
+	code := runLoop(ctx, mr, mw, []string{"-p", "hello"}, 5, 5*time.Minute, true)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+}
+
+// TestRunLoop_SessionIDUpdatedOnRetry は連続する rate limit でセッション ID が
+// 更新された場合に最新の ID が使われることを確認する。
+func TestRunLoop_SessionIDUpdatedOnRetry(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	mr := NewMockrunner(ctrl)
+	mw := NewMockwaiter(ctrl)
+
+	id1 := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	id2 := "11111111-2222-3333-4444-555555555555"
+
+	// 1回目: rate limited + セッション ID1
+	first := mr.EXPECT().RunClaude([]string{}).Return(runResult{
+		rateLimited: true,
+		exitCode:    0,
+		outputData:  []byte("rate limit\nclaude --resume " + id1),
+		sessionID:   id1,
+	}, nil)
+
+	mw.EXPECT().WaitUntil(gomock.Any(), gomock.Any()).Return(true)
+
+	// 2回目: --resume id1 で再開、再度 rate limited + セッション ID2
+	second := mr.EXPECT().RunClaude([]string{"--resume", id1}).Return(runResult{
+		rateLimited: true,
+		exitCode:    0,
+		outputData:  []byte("rate limit\nclaude --resume " + id2),
+		sessionID:   id2,
+	}, nil).After(first)
+
+	mw.EXPECT().WaitUntil(gomock.Any(), gomock.Any()).Return(true)
+
+	// 3回目: --resume id2 で再開、成功
+	mr.EXPECT().RunClaude([]string{"--resume", id2}).Return(runResult{
+		rateLimited: false,
+		exitCode:    0,
+	}, nil).After(second)
+
+	ctx := context.Background()
+	code := runLoop(ctx, mr, mw, []string{}, 5, 5*time.Minute, true)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+}
+
+// ============================================================
+// sessionIDPattern テスト
+// ============================================================
+
+func TestSessionIDPattern(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			"standard UUID",
+			"To resume this conversation, run: claude --resume 4fd16842-bfcb-41b1-bc20-6509b3eb0bdb",
+			"4fd16842-bfcb-41b1-bc20-6509b3eb0bdb",
+		},
+		{
+			"UUID in multiline output",
+			"Some output\nclaude --resume aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\nMore output",
+			"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := sessionIDPattern.FindSubmatch([]byte(tt.input))
+			if m == nil {
+				t.Fatalf("sessionIDPattern did not match %q", tt.input)
+			}
+			got := string(m[1])
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSessionIDPattern_NoMatch(t *testing.T) {
+	inputs := []string{
+		"normal output",
+		"claude --resume",          // UUID なし
+		"claude --resume not-uuid", // UUID 形式でない
+		"",
+	}
+	for _, input := range inputs {
+		m := sessionIDPattern.FindSubmatch([]byte(input))
+		if m != nil {
+			t.Errorf("sessionIDPattern should not match %q, got %q", input, string(m[1]))
+		}
+	}
+}
+
 func TestRunLoop_ContextCancelled(t *testing.T) {
 	ctrl := gomock.NewController(t)
 

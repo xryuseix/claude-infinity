@@ -76,8 +76,10 @@ func readAndIncrementCallCount() int {
 // doRateLimit は Usage Limit メッセージを出力して終了する。
 // リセット時刻は含まない（統合テストでの長時間待機を避けるため）。
 // claude-infinity の fallbackWait でリトライが制御される。
+// セッション ID を出力することで、再開時の --resume <UUID> をテストできる。
 func doRateLimit() {
 	fmt.Println("You've hit your limit")
+	fmt.Printf("To resume this conversation, run: claude --resume %s\n", generateFakeUUID())
 }
 
 // doRateLimitWithTime は実際の Claude Code に近い形式のリセット時刻付き
@@ -93,6 +95,7 @@ func doRateLimitWithTime() {
 	resetAt := time.Now().In(jst).Add(time.Hour)
 	fmt.Printf("You've hit your limit · resets %s\n(%s)\n",
 		formatHour(resetAt), resetAt.Location().String())
+	fmt.Printf("To resume this conversation, run: claude --resume %s\n", generateFakeUUID())
 }
 
 // formatHour は time.Time を "3am" / "3pm" 形式の文字列に変換する。
@@ -108,6 +111,14 @@ func formatHour(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dpm", h-12)
 	}
+}
+
+// generateFakeUUID はテスト用の UUID v4 風の文字列を生成する。
+func generateFakeUUID() string {
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		r.Int31(), r.Int31n(0xffff), r.Int31n(0xffff), r.Int31n(0xffff),
+		r.Int63n(0xffffffffffff))
 }
 
 // doSuccess は正常終了を模擬する。
