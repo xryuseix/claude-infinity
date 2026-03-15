@@ -1,107 +1,37 @@
 # claude-infinity
 
-Claude Code の Usage Limit に達した際、自動で待機し、制限解除後にセッションを再開するラッパーツールです。
+Claude Code の Usage Limit 時に自動待機・再開するラッパーツール。
 
-## 動作の仕組み
+## 仕組み
 
-1. PTY（擬似端末）経由で `claude` を起動し、ターミナルの色やインタラクティブ機能を維持
-2. 出力を循環バッファ（16KB）で常時監視し、Usage Limit 関連のパターンを正規表現で検出
-3. `"Your limit will reset at 7pm (Asia/Tokyo)"` のようなリセット時刻を出力からパースし、その時刻まで自動待機
-4. リセット時刻を取得できない場合は `--wait` で指定した時間分待機（デフォルト: 5分）
-5. `claude --resume` で前回のセッションを自動再開
-6. 最大リトライ回数に達するまで繰り返し
+PTY 経由で `claude` を起動し、出力を監視。Usage Limit を検出するとリセット時刻まで自動待機し、`claude --resume` でセッションを再開します。リセット時刻を取得できない場合は `--wait` 分だけ待機します。
 
 ## インストール
 
-### 前提条件
-
-- Go 1.21 以上
-- Claude Code がインストール済みで `claude` コマンドに PATH が通っていること
-- macOS または Linux
-
-### ビルド
+**前提:** Go 1.21+、`claude` コマンドが PATH に通っていること、macOS / Linux
 
 ```bash
 git clone https://github.com/r-ishikawa/claude-infinity.git
 cd claude-infinity
-make
-```
-
-`make` を実行すると、フォーマット → lint → ビルドの順に実行され、`claude-infinity` バイナリが生成されます。
-
-### インストール
-
-```bash
+make          # fmt → lint → build
+# または
 go install ./...
 ```
-
-`$GOBIN`（通常 `~/go/bin/`）に `claude-infinity` バイナリがインストールされます。
-
-### Makefile ターゲット
-
-| ターゲット | 説明 |
-|:--|:--|
-| `make` / `make all` | fmt → lint → build を順に実行 |
-| `make build` | `claude-infinity` バイナリをビルド |
-| `make fmt` | `gofmt` でコードをフォーマット |
-| `make lint` | `go vet` + `golangci-lint`（インストール済みの場合）を実行 |
-| `make vet` | `go vet` を実行 |
-| `make clean` | ビルド生成物を削除 |
-| `make install` | `go install` で `$GOBIN` にインストール |
 
 ## 使い方
 
 ```bash
-# 通常の対話モードで起動
-claude-infinity
-
-# claude に引数を渡す
-claude-infinity -- -p "このコードをレビューして"
-
-# フォールバック待機時間を10分に設定（デフォルト: 5分）
-claude-infinity --wait 10
-
-# 最大リトライ回数を変更（デフォルト: 50回）
-claude-infinity --max-retries 100
+claude-infinity                              # 対話モード
+claude-infinity -- -p "レビューして"           # claude に引数を渡す
+claude-infinity --wait 10                    # フォールバック待機時間を10分に (デフォルト: 5分)
+claude-infinity --max-retries 100            # 最大リトライ回数 (デフォルト: 50)
 ```
-
-## オプション
-
-| オプション | デフォルト | 説明 |
-|:--|:--|:--|
-| `--wait` | `5` | リセット時刻を取得できなかった場合のフォールバック待機時間（分） |
-| `--max-retries` | `50` | 最大リトライ回数 |
-
-## リセット時刻の自動検出
-
-Claude Code が Usage Limit に達すると、以下のようなメッセージが表示されます:
-
-```
-Claude usage limit reached. Your limit will reset at 7pm (Asia/Tokyo).
-```
-
-claude-infinity はこのメッセージからリセット時刻とタイムゾーンを自動的にパースし、その時刻 + 1分後に `claude --resume` で再開します。リセット時刻を取得できなかった場合は `--wait` の値をフォールバックとして使用します。
-
-## 検出するパターン
-
-以下のパターンを出力から検出した場合、Usage Limit と判定します:
-
-- `usage limit`
-- `rate limit`
-- `too many requests`
-- `quota exceeded`
-- `you've hit / reached`
-- `limit reached`
-- `try again later / in`
-- `throttle`（部分一致）
-- `resource exhausted`
 
 ## 注意事項
 
-- 待機中に別の Claude Code セッションを開くと、`--resume` が意図しないセッションを再開する可能性があります
-- 検出パターンは Claude Code の出力メッセージに依存するため、アップデートにより変更される可能性があります
-- 待機中に Ctrl+C で中断できます
-- Windows は非対応です（PTY を使用するため）
+- 待機中に別セッションを開くと `--resume` が意図しないセッションを再開する可能性あり
+- 検出パターンは Claude Code のアップデートで変更される可能性あり
+- Windows 非対応 (PTY 使用のため)
 
 ## ライセンス
 

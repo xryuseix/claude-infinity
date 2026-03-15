@@ -147,6 +147,21 @@ func TestIntegration_SessionIDResume(t *testing.T) {
 	// 引数の詳細検証はユニットテスト側で行う。
 }
 
+// TestIntegration_NoFalsePositiveFromFileContent は rate limit キーワードを含むファイル内容を
+// 出力した後、1KB 以上の通常出力で終了する fake-claude を使って、誤検出が発生しないことを確認する。
+func TestIntegration_NoFalsePositiveFromFileContent(t *testing.T) {
+	setupCallCount(t)
+	t.Setenv("FAKE_CLAUDE_SEQUENCE", "file_content_with_keywords")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	code := runLoop(ctx, &ptyRunner{}, &realWaiter{}, []string{}, 3, 100*time.Millisecond, true)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0 (false positive rate limit detection)", code)
+	}
+}
+
 // TestIntegration_ResetTimeDetection は fake-claude が "resets Xam (Asia/Tokyo)" 形式の
 // メッセージを出力したとき、claude-infinity がリセット時刻を正しく解析して
 // WaitUntil に渡すことを確認する。

@@ -55,6 +55,63 @@ func TestRingBuffer_Empty(t *testing.T) {
 }
 
 // ============================================================
+// ringBuffer.Tail テスト
+// ============================================================
+
+func TestRingBuffer_Tail_Basic(t *testing.T) {
+	rb := newRingBuffer(10)
+	if _, err := rb.Write([]byte("hello world")); err != nil {
+		t.Fatal(err)
+	}
+	// バッファには "ello world" (10バイト) が入っている
+	got := string(rb.Tail(5))
+	if got != "world" {
+		t.Errorf("Tail(5) = %q, want %q", got, "world")
+	}
+}
+
+func TestRingBuffer_Tail_LargerThanContent(t *testing.T) {
+	rb := newRingBuffer(10)
+	if _, err := rb.Write([]byte("hi")); err != nil {
+		t.Fatal(err)
+	}
+	got := string(rb.Tail(100))
+	if got != "hi" {
+		t.Errorf("Tail(100) = %q, want %q", got, "hi")
+	}
+}
+
+func TestRingBuffer_Tail_ExactSize(t *testing.T) {
+	rb := newRingBuffer(10)
+	if _, err := rb.Write([]byte("0123456789")); err != nil {
+		t.Fatal(err)
+	}
+	got := string(rb.Tail(10))
+	if got != "0123456789" {
+		t.Errorf("Tail(10) = %q, want %q", got, "0123456789")
+	}
+}
+
+func TestRingBuffer_Tail_Overflow(t *testing.T) {
+	rb := newRingBuffer(5)
+	if _, err := rb.Write([]byte("abcdefgh")); err != nil { // バッファに "defgh" が残る
+		t.Fatal(err)
+	}
+	got := string(rb.Tail(3))
+	if got != "fgh" {
+		t.Errorf("Tail(3) = %q, want %q", got, "fgh")
+	}
+}
+
+func TestRingBuffer_Tail_Empty(t *testing.T) {
+	rb := newRingBuffer(10)
+	got := rb.Tail(5)
+	if len(got) != 0 {
+		t.Errorf("Tail(5) on empty buffer = %q, want empty", got)
+	}
+}
+
+// ============================================================
 // isRateLimited テスト
 // ============================================================
 
@@ -84,6 +141,78 @@ func TestIsRateLimited(t *testing.T) {
 				t.Errorf("isRateLimited(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestIsRateLimited_FalsePositive_FileContent は、ファイル内容に rate limit キーワードが
+// 含まれていても、Tail(1024) で検出されないことを確認する。
+func TestIsRateLimited_FalsePositive_FileContent(t *testing.T) {
+	// CLAUDE.md のような内容を含むファイル表示をシミュレート
+	fileContent := []byte("Usage Limit 時に自動で待機・再開する Claude Code ラッパーツール。\n" +
+		"rate limit を検出して自動リトライ。\n" +
+		"you've hit your limit の場合にも対応。\n")
+
+	// ファイル内容の後に 1KB 以上の通常出力が続く
+	normalOutput := make([]byte, 1200)
+	for i := range normalOutput {
+		normalOutput[i] = 'x'
+	}
+
+	rb := newRingBuffer(16384)
+	if _, err := rb.Write(fileContent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rb.Write(normalOutput); err != nil {
+		t.Fatal(err)
+	}
+
+	// Tail(1024) では通常出力のみが含まれるため、誤検出しない
+	if isRateLimited(rb.Tail(tailCheckSize)) {
+		t.Error("isRateLimited should return false when file content with keywords is outside Tail window")
+	}
+
+	// Bytes() 全体だと検出してしまう（修正前の動作）
+	if !isRateLimited(rb.Bytes()) {
+		t.Error("isRateLimited(Bytes()) should return true (demonstrates the old bug)")
+	}
+}
+
+// TestIsRateLimited_TruePositive_RecentRateLimit は、直近出力に rate limit メッセージが
+// ある場合に Tail(1024) で検出されることを確認する。
+func TestIsRateLimited_TruePositive_RecentRateLimit(t *testing.T) {
+	rb := newRingBuffer(16384)
+	// 先に通常出力
+	if _, err := rb.Write([]byte("normal output from claude...\n")); err != nil {
+		t.Fatal(err)
+	}
+	// 直近に rate limit メッセージ
+	if _, err := rb.Write([]byte("You\u2019ve hit your usage limit\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	if !isRateLimited(rb.Tail(tailCheckSize)) {
+		t.Error("isRateLimited should return true for recent rate limit message in Tail window")
+	}
+}
+
+// TestIsRateLimited_UnescapedDotFixed は、パターン5の正規表現修正を確認する。
+// 修正前: `you.ve` のドットがワイルドカードとして "youXve" 等にもマッチしていた。
+func TestIsRateLimited_UnescapedDotFixed(t *testing.T) {
+	// "youXve hit" は誤マッチしないこと
+	if isRateLimited([]byte("youXve hit the limit")) {
+		t.Error("isRateLimited should not match 'youXve' (dot was a wildcard bug)")
+	}
+
+	// 正当なアポストロフィはマッチすること
+	cases := []string{
+		"you've hit the limit",      // ASCII アポストロフィ
+		"you\u2019ve hit the limit", // Unicode 右引用符 '
+		"you\u2018ve hit the limit", // Unicode 左引用符 '
+	}
+	for _, c := range cases {
+		if !isRateLimited([]byte(c)) {
+			t.Errorf("isRateLimited(%q) should return true", c)
+		}
 	}
 }
 

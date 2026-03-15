@@ -36,6 +36,8 @@ func main() {
 			doRateLimit()
 		case "rate_limit_with_time":
 			doRateLimitWithTime()
+		case "file_content_with_keywords":
+			doFileContentWithKeywords()
 		default:
 			doSuccess()
 		}
@@ -119,6 +121,24 @@ func generateFakeUUID() string {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		r.Int31(), r.Int31n(0xffff), r.Int31n(0xffff), r.Int31n(0xffff),
 		r.Int63n(0xffffffffffff))
+}
+
+// doFileContentWithKeywords は rate limit キーワードを含むファイル内容を表示した後、
+// 1KB 以上の通常出力で終了する。誤検出テスト用。
+func doFileContentWithKeywords() {
+	// CLAUDE.md のような内容を出力
+	fmt.Println("# claude-infinity")
+	fmt.Println("")
+	fmt.Println("Usage Limit 時に自動で待機・再開する Claude Code ラッパーツール。")
+	fmt.Println("rate limit を検出して自動リトライ。")
+	fmt.Println("you've hit your limit の場合にも対応。")
+	fmt.Println("")
+
+	// 1KB 以上の通常出力を追加して、キーワードを Tail ウィンドウから押し出す
+	for i := 0; i < 20; i++ {
+		fmt.Printf("Normal output line %d: This is regular Claude output without any special keywords.\n", i)
+	}
+	fmt.Println("Done! Task completed successfully.")
 }
 
 // doSuccess は正常終了を模擬する。

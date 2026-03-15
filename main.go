@@ -102,13 +102,27 @@ func (r *ringBuffer) Bytes() []byte {
 	return out
 }
 
+// Tail は末尾 n バイトのみを返す。バッファの内容が n バイト未満の場合は全内容を返す。
+func (r *ringBuffer) Tail(n int) []byte {
+	all := r.Bytes()
+	if len(all) <= n {
+		return all
+	}
+	return all[len(all)-n:]
+}
+
+// tailCheckSize は rate limit 検出時にスキャンする末尾バイト数。
+// Claude の rate limit メッセージは ANSI エスケープ含めても ~500 バイト。
+// 1KB は十分なマージンを持ちつつ、ファイル内容の誤検出を防ぐ。
+const tailCheckSize = 1024
+
 // Usage Limit / Rate Limit を示す出力パターン
 var limitPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)usage[\s_-]*limit`),
 	regexp.MustCompile(`(?i)rate[\s_-]*limit`),
 	regexp.MustCompile(`(?i)too\s+many\s+requests`),
 	regexp.MustCompile(`(?i)quota[\s_-]*exceeded`),
-	regexp.MustCompile(`(?i)you.ve\s+(hit|reached)`),
+	regexp.MustCompile("(?i)you['\u2018\u2019]ve\\s+(hit|reached)"),
 	regexp.MustCompile(`(?i)limit\s+reached`),
 	regexp.MustCompile(`(?i)requests?\s+throttled`),
 	regexp.MustCompile(`(?i)resource[\s_-]*exhausted`),
@@ -195,24 +209,61 @@ type runResult struct {
 	sessionID   string // "claude --resume <UUID>" から抽出したセッション ID
 }
 
+// rateLimitIdleTimeout は rate limit パターンを検出してから、出力が停止した場合に
+// SIGTERM を送るまでの待機時間。ファイル内容表示中の誤検出を防ぐ。
+// 出力が続いている間はタイマーがリセットされるため、ファイル内容にキーワードが
+// 含まれていても後続の出力でキーワードが Tail ウィンドウから押し出される。
+var rateLimitIdleTimeout = 3 * time.Second
+
 // rateLimitDetector は io.Writer を実装し、書き込まれたデータを dst に転送しながら
-// ring buffer の内容を監視する。rate limit パターンを検出した時点で proc に SIGTERM を
-// 一度だけ送り、Claude を自動終了させる。
+// ring buffer の末尾 tailCheckSize バイトを監視する。rate limit パターンを検出すると
+// アイドルタイマーを設定し、出力停止後にタイムアウトで proc に SIGTERM を送る。
+// 出力が続いている間はタイマーがリセットされるため、ファイル内容表示中の誤検出を防ぐ。
 type rateLimitDetector struct {
-	dst  io.Writer
-	ring *ringBuffer
-	proc *os.Process
-	once sync.Once
+	dst       io.Writer
+	ring      *ringBuffer
+	proc      *os.Process
+	once      sync.Once
+	mu        sync.Mutex
+	idleTimer *time.Timer
 }
 
 func (d *rateLimitDetector) Write(p []byte) (int, error) {
 	n, err := d.dst.Write(p)
-	if isRateLimited(d.ring.Bytes()) {
-		d.once.Do(func() {
-			_ = d.proc.Signal(syscall.SIGTERM)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if isRateLimited(d.ring.Tail(tailCheckSize)) {
+		// パターン検出: アイドルタイマーを設定/リセット。
+		// 出力が続いている間はタイマーがリセットされるため SIGTERM は送られない。
+		if d.idleTimer != nil {
+			d.idleTimer.Stop()
+		}
+		d.idleTimer = time.AfterFunc(rateLimitIdleTimeout, func() {
+			d.once.Do(func() {
+				_ = d.proc.Signal(syscall.SIGTERM)
+			})
 		})
+	} else {
+		// パターンが Tail ウィンドウから消えたらタイマーをキャンセル
+		if d.idleTimer != nil {
+			d.idleTimer.Stop()
+			d.idleTimer = nil
+		}
 	}
+
 	return n, err
+}
+
+// stop はアイドルタイマーを停止する。プロセス終了後に呼び出す。
+func (d *rateLimitDetector) stop() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.idleTimer != nil {
+		d.idleTimer.Stop()
+		d.idleTimer = nil
+	}
 }
 
 // runClaude は claude CLI を PTY 経由で起動し、出力を監視する
@@ -283,6 +334,9 @@ func runClaude(args []string) (runResult, error) {
 
 	waitErr := cmd.Wait()
 
+	// プロセス終了後、アイドルタイマーを停止する（不要な SIGTERM を防ぐ）
+	detector.stop()
+
 	// 残りの出力がフラッシュされるのを待つ
 	select {
 	case <-copyDone:
@@ -297,7 +351,7 @@ func runClaude(args []string) (runResult, error) {
 	}
 
 	ringData := ring.Bytes()
-	result.rateLimited = isRateLimited(ringData)
+	result.rateLimited = isRateLimited(ring.Tail(tailCheckSize))
 	result.outputData = ringData
 	if m := sessionIDPattern.FindSubmatch(ringData); m != nil {
 		result.sessionID = string(m[1])
