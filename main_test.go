@@ -92,10 +92,10 @@ func TestIsRateLimited_NoMatch(t *testing.T) {
 		"normal output",
 		"everything is fine",
 		"claude is running",
-		"please try again later",      // 汎用的な「後で再試行」はマッチしない
-		"try again in 5 minutes",      // 同上
-		"CPU throttling detected",     // CPU 制限はマッチしない
-		"network throttling enabled",  // ネットワーク制限はマッチしない
+		"please try again later",     // 汎用的な「後で再試行」はマッチしない
+		"try again in 5 minutes",     // 同上
+		"CPU throttling detected",    // CPU 制限はマッチしない
+		"network throttling enabled", // ネットワーク制限はマッチしない
 		"",
 	}
 	for _, input := range inputs {
@@ -210,7 +210,7 @@ func TestRunLoop_NormalExit(t *testing.T) {
 	mr := NewMockrunner(ctrl)
 	mw := NewMockwaiter(ctrl)
 
-	mr.EXPECT().RunClaude([]string{"-p", "hello"}).Return(runResult{
+	mr.EXPECT().RunClaude([]string{"--permission-mode", "auto", "-p", "hello"}).Return(runResult{
 		rateLimited: false,
 		exitCode:    0,
 	}, nil)
@@ -229,7 +229,7 @@ func TestRunLoop_RateLimitThenSuccess(t *testing.T) {
 	mw := NewMockwaiter(ctrl)
 
 	// 1回目: rate limited（リセット時刻なし）
-	first := mr.EXPECT().RunClaude([]string{"-p", "hello"}).Return(runResult{
+	first := mr.EXPECT().RunClaude([]string{"--permission-mode", "auto", "-p", "hello"}).Return(runResult{
 		rateLimited: true,
 		exitCode:    0,
 		outputData:  []byte("usage limit hit"),
@@ -239,7 +239,7 @@ func TestRunLoop_RateLimitThenSuccess(t *testing.T) {
 	mw.EXPECT().WaitUntil(gomock.Any(), gomock.Any()).Return(true)
 
 	// 2回目: --resume で再開、成功
-	mr.EXPECT().RunClaude([]string{"--resume"}).Return(runResult{
+	mr.EXPECT().RunClaude([]string{"--permission-mode", "auto", "--resume"}).Return(runResult{
 		rateLimited: false,
 		exitCode:    0,
 	}, nil).After(first)
@@ -258,7 +258,7 @@ func TestRunLoop_WithResetTime(t *testing.T) {
 	mw := NewMockwaiter(ctrl)
 
 	// rate limited + リセット時刻あり
-	first := mr.EXPECT().RunClaude([]string{}).Return(runResult{
+	first := mr.EXPECT().RunClaude([]string{"--permission-mode", "auto"}).Return(runResult{
 		rateLimited: true,
 		exitCode:    0,
 		outputData:  []byte("Your limit will reset at 7pm (UTC)"),
@@ -268,7 +268,7 @@ func TestRunLoop_WithResetTime(t *testing.T) {
 	mw.EXPECT().WaitUntil(gomock.Any(), gomock.Any()).Return(true)
 
 	// 2回目: 成功
-	mr.EXPECT().RunClaude([]string{"--resume"}).Return(runResult{
+	mr.EXPECT().RunClaude([]string{"--permission-mode", "auto", "--resume"}).Return(runResult{
 		rateLimited: false,
 		exitCode:    0,
 	}, nil).After(first)
@@ -289,14 +289,14 @@ func TestRunLoop_MaxRetriesExceeded(t *testing.T) {
 	maxRetries := 3
 
 	// 1回目: 初期引数で rate limited
-	mr.EXPECT().RunClaude([]string{}).Return(runResult{
+	mr.EXPECT().RunClaude([]string{"--permission-mode", "auto"}).Return(runResult{
 		rateLimited: true,
 		exitCode:    0,
 		outputData:  []byte("rate limit"),
 	}, nil)
 
 	// 2回目・3回目: --resume で rate limited
-	mr.EXPECT().RunClaude([]string{"--resume"}).Return(runResult{
+	mr.EXPECT().RunClaude([]string{"--permission-mode", "auto", "--resume"}).Return(runResult{
 		rateLimited: true,
 		exitCode:    0,
 		outputData:  []byte("rate limit"),
@@ -318,7 +318,7 @@ func TestRunLoop_RunError(t *testing.T) {
 	mr := NewMockrunner(ctrl)
 	mw := NewMockwaiter(ctrl)
 
-	mr.EXPECT().RunClaude([]string{}).Return(runResult{}, errors.New("failed to start"))
+	mr.EXPECT().RunClaude([]string{"--permission-mode", "auto"}).Return(runResult{}, errors.New("failed to start"))
 
 	ctx := context.Background()
 	code := runLoop(ctx, mr, mw, []string{}, 5, 5*time.Minute, true)
@@ -338,7 +338,7 @@ func TestRunLoop_RateLimitWithSessionID(t *testing.T) {
 	sessionID := "4fd16842-bfcb-41b1-bc20-6509b3eb0bdb"
 
 	// 1回目: rate limited + セッション ID あり
-	first := mr.EXPECT().RunClaude([]string{"-p", "hello"}).Return(runResult{
+	first := mr.EXPECT().RunClaude([]string{"--permission-mode", "auto", "-p", "hello"}).Return(runResult{
 		rateLimited: true,
 		exitCode:    0,
 		outputData:  []byte("usage limit hit\nclaude --resume " + sessionID),
@@ -349,7 +349,7 @@ func TestRunLoop_RateLimitWithSessionID(t *testing.T) {
 	mw.EXPECT().WaitUntil(gomock.Any(), gomock.Any()).Return(true)
 
 	// 2回目: --resume <UUID> で再開、成功
-	mr.EXPECT().RunClaude([]string{"--resume", sessionID}).Return(runResult{
+	mr.EXPECT().RunClaude([]string{"--permission-mode", "auto", "--resume", sessionID}).Return(runResult{
 		rateLimited: false,
 		exitCode:    0,
 	}, nil).After(first)
@@ -373,7 +373,7 @@ func TestRunLoop_SessionIDUpdatedOnRetry(t *testing.T) {
 	id2 := "11111111-2222-3333-4444-555555555555"
 
 	// 1回目: rate limited + セッション ID1
-	first := mr.EXPECT().RunClaude([]string{}).Return(runResult{
+	first := mr.EXPECT().RunClaude([]string{"--permission-mode", "auto"}).Return(runResult{
 		rateLimited: true,
 		exitCode:    0,
 		outputData:  []byte("rate limit\nclaude --resume " + id1),
@@ -383,7 +383,7 @@ func TestRunLoop_SessionIDUpdatedOnRetry(t *testing.T) {
 	mw.EXPECT().WaitUntil(gomock.Any(), gomock.Any()).Return(true)
 
 	// 2回目: --resume id1 で再開、再度 rate limited + セッション ID2
-	second := mr.EXPECT().RunClaude([]string{"--resume", id1}).Return(runResult{
+	second := mr.EXPECT().RunClaude([]string{"--permission-mode", "auto", "--resume", id1}).Return(runResult{
 		rateLimited: true,
 		exitCode:    0,
 		outputData:  []byte("rate limit\nclaude --resume " + id2),
@@ -393,7 +393,7 @@ func TestRunLoop_SessionIDUpdatedOnRetry(t *testing.T) {
 	mw.EXPECT().WaitUntil(gomock.Any(), gomock.Any()).Return(true)
 
 	// 3回目: --resume id2 で再開、成功
-	mr.EXPECT().RunClaude([]string{"--resume", id2}).Return(runResult{
+	mr.EXPECT().RunClaude([]string{"--permission-mode", "auto", "--resume", id2}).Return(runResult{
 		rateLimited: false,
 		exitCode:    0,
 	}, nil).After(second)
@@ -462,7 +462,7 @@ func TestRunLoop_ContextCancelled(t *testing.T) {
 	mw := NewMockwaiter(ctrl)
 
 	// rate limited
-	mr.EXPECT().RunClaude([]string{}).Return(runResult{
+	mr.EXPECT().RunClaude([]string{"--permission-mode", "auto"}).Return(runResult{
 		rateLimited: true,
 		exitCode:    0,
 		outputData:  []byte("rate limit"),

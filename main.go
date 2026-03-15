@@ -334,14 +334,14 @@ func waitUntil(ctx context.Context, target time.Time) bool {
 
 // limitState は rate limit 検出時に .infinity.json に書き出すデバッグ情報
 type limitState struct {
-	DetectedAt     time.Time `json:"detected_at"`
-	ResumeAt       time.Time `json:"resume_at"`
-	ResetTimeFound bool      `json:"reset_time_found"`
-	Retry          int       `json:"retry"`
-	MaxRetries     int       `json:"max_retries"`
-	FallbackWaitMin int      `json:"fallback_wait_min"`
-	NoSandbox      bool      `json:"no_sandbox"`
-	Args           []string  `json:"args"`
+	DetectedAt      time.Time `json:"detected_at"`
+	ResumeAt        time.Time `json:"resume_at"`
+	ResetTimeFound  bool      `json:"reset_time_found"`
+	Retry           int       `json:"retry"`
+	MaxRetries      int       `json:"max_retries"`
+	FallbackWaitMin int       `json:"fallback_wait_min"`
+	NoSandbox       bool      `json:"no_sandbox"`
+	Args            []string  `json:"args"`
 }
 
 // writeLimitState は rate limit 検出時の状態を JSON ファイルに書き出す。
@@ -373,10 +373,10 @@ const sandboxSettings = `{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":t
 func runLoop(ctx context.Context, r runner, w waiter, args []string, maxRetries int, fallbackWait time.Duration, noSandbox bool) int {
 	fmt.Fprintf(os.Stderr, "[claude-infinity] Starting Claude Code...\n")
 
-	// デフォルトでサンドボックスモードを有効化する引数
-	defaultArgs := []string{}
+	// デフォルトで permission-mode auto とサンドボックスモードを有効化する引数
+	defaultArgs := []string{"--permission-mode", "auto"}
 	if !noSandbox {
-		defaultArgs = []string{"--settings", sandboxSettings}
+		defaultArgs = append(defaultArgs, "--settings", sandboxSettings)
 	}
 
 	isResume := false
