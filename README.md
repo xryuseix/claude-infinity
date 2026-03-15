@@ -15,7 +15,7 @@ git clone https://github.com/r-ishikawa/claude-infinity.git
 cd claude-infinity
 make          # fmt → lint → build
 # または
-go install ./...
+go install github.com/r-ishikawa/claude-infinity@latest
 ```
 
 ## 使い方
@@ -23,14 +23,11 @@ go install ./...
 ```bash
 claude-infinity                              # 対話モード
 claude-infinity -- -p "レビューして"           # claude に引数を渡す
-claude-infinity --wait 10                    # フォールバック待機時間を10分に (デフォルト: 5分)
-claude-infinity --max-retries 100            # 最大リトライ回数 (デフォルト: 50)
 ```
 
 ## 注意事項
 
 - 待機中に別セッションを開くと `--resume` が意図しないセッションを再開する可能性あり
-- 検出パターンは Claude Code のアップデートで変更される可能性あり
 - Windows 非対応 (PTY 使用のため)
 
 ## ライセンス
