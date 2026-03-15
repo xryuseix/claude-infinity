@@ -345,17 +345,13 @@ type limitState struct {
 }
 
 // writeLimitState は rate limit 検出時の状態を JSON ファイルに書き出す。
-// 書き出し先は環境変数 CLAUDE_INFINITY_STATE_FILE で変更できる（デフォルト: .infinity.json）。
-// 環境変数を空文字に設定すると書き出しを無効化できる。
+// DEBUG=1 が設定されている場合のみ .infinity.json に出力する。
 func writeLimitState(state limitState) {
-	path := os.Getenv("CLAUDE_INFINITY_STATE_FILE")
-	if path == "" {
-		path = ".infinity.json"
-	}
-	if path == "-" {
-		return // 明示的に無効化
+	if os.Getenv("DEBUG") != "1" {
+		return
 	}
 
+	path := ".infinity.json"
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[claude-infinity] Warning: failed to marshal state: %v\n", err)
