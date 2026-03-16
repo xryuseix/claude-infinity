@@ -11,11 +11,11 @@ PTY 経由で `claude` を起動し、出力を監視。Usage Limit を検出す
 **前提:** Go 1.21+、`claude` コマンドが PATH に通っていること、macOS / Linux
 
 ```bash
-git clone https://github.com/r-ishikawa/claude-infinity.git
+git clone https://github.com/xryuseix/claude-infinity.git
 cd claude-infinity
 make          # fmt → lint → build
 # または
-go install github.com/r-ishikawa/claude-infinity@latest
+go install github.com/xryuseix/claude-infinity@latest
 ```
 
 ## 使い方
