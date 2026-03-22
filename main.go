@@ -226,6 +226,7 @@ type rateLimitDetector struct {
 	once      sync.Once
 	mu        sync.Mutex
 	idleTimer *time.Timer
+	detected  bool // 一度でも rate limit を検出したら true にラッチ
 }
 
 func (d *rateLimitDetector) Write(p []byte) (int, error) {
@@ -235,6 +236,7 @@ func (d *rateLimitDetector) Write(p []byte) (int, error) {
 	defer d.mu.Unlock()
 
 	if isRateLimited(d.ring.Tail(tailCheckSize)) {
+		d.detected = true
 		// パターン検出: アイドルタイマーを設定/リセット。
 		// 出力が続いている間はタイマーがリセットされるため SIGTERM は送られない。
 		if d.idleTimer != nil {
@@ -245,8 +247,9 @@ func (d *rateLimitDetector) Write(p []byte) (int, error) {
 				_ = d.proc.Signal(syscall.SIGTERM)
 			})
 		})
-	} else {
-		// パターンが Tail ウィンドウから消えたらタイマーをキャンセル
+	} else if !d.detected {
+		// パターンが Tail ウィンドウから消え、かつ未検出の場合のみタイマーをキャンセル。
+		// 一度検出済み (detected=true) の場合はタイマーを維持して SIGTERM を確実に送る。
 		if d.idleTimer != nil {
 			d.idleTimer.Stop()
 			d.idleTimer = nil
@@ -351,7 +354,9 @@ func runClaude(args []string) (runResult, error) {
 	}
 
 	ringData := ring.Bytes()
-	result.rateLimited = isRateLimited(ring.Tail(tailCheckSize))
+	// ラッチされた検出状態を使用。Tail ウィンドウからパターンが押し出されても
+	// 一度検出していれば rateLimited を true にする。
+	result.rateLimited = detector.detected || isRateLimited(ring.Tail(tailCheckSize))
 	result.outputData = ringData
 	if m := sessionIDPattern.FindSubmatch(ringData); m != nil {
 		result.sessionID = string(m[1])
